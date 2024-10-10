@@ -185,9 +185,9 @@ return {
         end
 
         if action == "prev" then
-            goto_snapshot(idx - 1)
-        elseif action == "next" then
             goto_snapshot(idx + 1)
+        elseif action == "next" then
+            goto_snapshot(idx - 1)
         end
     end,
 }

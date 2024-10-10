@@ -1,6 +1,6 @@
 # zfs.yazi
 
-Browse forwards and backwards in time through ZFS snapshots.
+A yazi plugin for browsing backwards and forwards in time through ZFS snapshots.
 
 <!-- GIF here -->
 
