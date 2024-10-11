@@ -163,8 +163,10 @@ return {
         ---@param end_idx integer
         ---@param step integer
         local find_and_goto_snapshot = function(start_idx, end_idx, step)
-            -- invalid snapshot index
-            if start_idx < 1 then
+            if start_idx == 0 then
+                -- going from newest snapshot to current state
+                return ya.manager_emit("cd", { mountpoint .. relative })
+            elseif start_idx < 0 then
                 return notify_warn("No earlier snapshots found.")
             elseif start_idx > #snapshots then
                 return notify_warn("No later snapshots found.")
