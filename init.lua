@@ -128,6 +128,10 @@ return {
         local action = args[1]
         local cwd = get_cwd()
 
+        if action ~= "exit" and action ~= "prev" and action ~= "next" then
+            return notify_error("Invalid action: " .. action)
+        end
+
         local dataset = get_dataset(cwd)
         local current_snapshot = ""
         if is_snapshot_dir(cwd) then
@@ -155,39 +159,50 @@ return {
             return notify_warn("No snapshots found.")
         end
 
-        local goto_snapshot = function(idx)
+        ---@param start_idx integer
+        ---@param end_idx integer
+        ---@param step integer
+        local find_and_goto_snapshot = function(start_idx, end_idx, step)
             -- invalid snapshot index
-            if idx < 1 then
+            if start_idx < 1 then
                 return notify_warn("No earlier snapshots found.")
-            elseif idx > #snapshots then
+            elseif start_idx > #snapshots then
                 return notify_warn("No later snapshots found.")
             end
 
-            local snapshot_dir = mountpoint .. "/.zfs/snapshot/" .. snapshots[idx] .. relative
-            ya.manager_emit("cd", { snapshot_dir })
+            for i = start_idx, end_idx, step do
+                local snapshot_dir = mountpoint .. "/.zfs/snapshot/" .. snapshots[i] .. relative
+
+                -- check if relative path within snapshot exists
+                if io.open(snapshot_dir, "r") then
+                    return ya.manager_emit("cd", { snapshot_dir })
+                end
+            end
+
+            local direction = action == "prev" and "earlier" or "later"
+            return notify_warn("No " .. direction .. " snapshots found.")
         end
 
         -- NOTE: latest snapshot is first in list
         if current_snapshot == "" then
             if action == "prev" then
                 -- go to latest snapshot
-                goto_snapshot(1)
+                return find_and_goto_snapshot(1, #snapshots, 1)
             elseif action == "next" then
                 return notify_warn("No later snapshots found.")
             end
-            return
         end
 
         -- has current snapshot
         local idx = find_index(snapshots, current_snapshot)
         if idx == nil then
-            return notify_warn("Snapshot not found.")
+            return notify_error("Snapshot not found.")
         end
 
         if action == "prev" then
-            goto_snapshot(idx + 1)
+            find_and_goto_snapshot(idx + 1, #snapshots, 1)
         elseif action == "next" then
-            goto_snapshot(idx - 1)
+            find_and_goto_snapshot(1, idx - 1, -1)
         end
     end,
 }
