@@ -9,10 +9,11 @@ local notify_error = function(msg)
 end
 
 ---@param arr table
----@param elem any
-local find_index = function(arr, elem)
+---@param predicate fun(value: any): boolean
+---@return number|nil # index if found, nil if not found
+local find_index = function(arr, predicate)
     for i, value in ipairs(arr) do
-        if value == elem then
+        if predicate(value) then
             return i
         end
     end
@@ -25,10 +26,10 @@ local get_cwd = ya.sync(function()
 end)
 
 ---@param cwd string
----@return string
-local get_dataset = function(cwd)
+---@return string|nil
+local zfs_dataset = function(cwd)
     local df, _ = Command("df"):args({ "--output=source", cwd }):output()
-    local dataset = ""
+    local dataset = nil
     for line in df.stdout:gmatch("[^\r\n]+") do
         -- dataset is last line in output
         dataset = line
@@ -38,7 +39,7 @@ end
 
 ---@param dataset string
 ---@return string|nil
-local get_mountpoint = function(dataset)
+local zfs_mountpoint = function(dataset)
     local zfs, _ = Command("zfs"):args({ "get", "-H", "-o", "value", "mountpoint", dataset }):output()
 
     -- not a dataset!
@@ -72,20 +73,15 @@ local get_mountpoint = function(dataset)
     return nil
 end
 
----@param d string
-local is_snapshot_dir = function(d)
-    return d:find(".zfs/snapshot") ~= nil
-end
-
 -- returns the path relative to the mountpoint / snapshot
 ---@param cwd string
 ---@param mountpoint string
-local get_relative = function(cwd, mountpoint)
+local zfs_relative = function(cwd, mountpoint)
     -- relative path to get mountpoint
     local relative = (cwd:sub(0, #mountpoint) == mountpoint) and cwd:sub(#mountpoint + 1) or cwd
 
     -- is a snapshot dir, strip everything after "/snapshot"
-    if is_snapshot_dir(cwd) then
+    if cwd:find(".zfs/snapshot") ~= nil then
         local snapshot_pos = cwd:find("/snapshot")
 
         -- everything after the "/snapshot/"
@@ -102,9 +98,16 @@ local get_relative = function(cwd, mountpoint)
     return relative
 end
 
+---@class Snapshot
+---@field name string
+---@field path string
+---@field time string
+
 ---@param dataset string
----@return string[]
-local get_snapshots = function(dataset)
+---@param mountpoint string
+---@param relative string
+---@return Snapshot[]
+local zfs_snapshots = function(dataset, mountpoint, relative)
     -- -S is for reverse order
     local zfs_snapshots, _ = Command("zfs"):args({ "list", "-H", "-t", "snapshot", "-o", "name", "-S", "creation",
             dataset })
@@ -114,11 +117,18 @@ local get_snapshots = function(dataset)
         return {}
     end
 
+    ---@type Snapshot[]
     local snapshots = {}
     for snapshot in zfs_snapshots.stdout:gmatch("[^\r\n]+") do
         -- in the format dataset@snapshot
         local sep = snapshot:find("@")
-        table.insert(snapshots, snapshot:sub(sep + 1))
+        local id = snapshot:sub(sep + 1)
+
+        table.insert(snapshots, {
+            id = id,
+            time = "", -- unused
+            path = mountpoint .. "/.zfs/snapshot/" .. id .. relative,
+        })
     end
     return snapshots
 end
@@ -132,29 +142,36 @@ return {
             return notify_error("Invalid action: " .. action)
         end
 
-        local dataset = get_dataset(cwd)
-        local current_snapshot = ""
-        if is_snapshot_dir(cwd) then
+        ------------------------ BEGIN
+        local dataset = zfs_dataset(cwd)
+        if dataset == nil then
+            return notify_error("Current directory is not within a ZFS dataset!")
+        end
+
+        local current_snapshot_id = ""
+        if cwd:find(".zfs/snapshot") ~= nil then
             -- in the format dataset@snapshot
             local sep = dataset:find("@")
-            current_snapshot = dataset:sub(sep + 1)
+            current_snapshot_id = dataset:sub(sep + 1)
             dataset = dataset:sub(1, sep - 1)
         end
 
-        local mountpoint = get_mountpoint(dataset)
+        local mountpoint = zfs_mountpoint(dataset)
         if mountpoint == nil then
             return notify_error("Current directory is not within a ZFS dataset!")
         end
 
         -- NOTE: relative already has leading "/"
-        local relative = get_relative(cwd, mountpoint)
+        local relative = zfs_relative(cwd, mountpoint)
+        local latest_path = mountpoint .. relative
+        ------------------------- END
 
         if action == "exit" then
-            ya.manager_emit("cd", { mountpoint .. relative })
+            ya.manager_emit("cd", { latest_path })
             return
         end
 
-        local snapshots = get_snapshots(dataset)
+        local snapshots = zfs_snapshots(dataset, mountpoint, relative)
         if #snapshots == 0 then
             return notify_warn("No snapshots found.")
         end
@@ -165,7 +182,7 @@ return {
         local find_and_goto_snapshot = function(start_idx, end_idx, step)
             if start_idx == 0 then
                 -- going from newest snapshot to current state
-                return ya.manager_emit("cd", { mountpoint .. relative })
+                return ya.manager_emit("cd", { latest_path })
             elseif start_idx < 0 then
                 return notify_warn("No earlier snapshots found.")
             elseif start_idx > #snapshots then
@@ -173,9 +190,7 @@ return {
             end
 
             for i = start_idx, end_idx, step do
-                local snapshot_dir = mountpoint .. "/.zfs/snapshot/" .. snapshots[i] .. relative
-
-                -- check if relative path within snapshot exists
+                local snapshot_dir = snapshots[i].path
                 if io.open(snapshot_dir, "r") then
                     return ya.manager_emit("cd", { snapshot_dir })
                 end
@@ -186,7 +201,7 @@ return {
         end
 
         -- NOTE: latest snapshot is first in list
-        if current_snapshot == "" then
+        if current_snapshot_id == "" then
             if action == "prev" then
                 -- go to latest snapshot
                 return find_and_goto_snapshot(1, #snapshots, 1)
@@ -196,7 +211,7 @@ return {
         end
 
         -- has current snapshot
-        local idx = find_index(snapshots, current_snapshot)
+        local idx = find_index(snapshots, function(snapshot) return snapshot.id == current_snapshot_id end)
         if idx == nil then
             return notify_error("Snapshot not found.")
         end
