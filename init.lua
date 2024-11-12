@@ -313,7 +313,7 @@ return {
             local relative = zfs_relative(cwd, mountpoint)
 
             latest_path = mountpoint .. relative
-            SNAPSHOTS = zfs_snapshots(dataset, mountpoint, relative)
+            snapshots = zfs_snapshots(dataset, mountpoint, relative)
         elseif fs_type == "btrfs" then
             local mountpoint = btrfs_mountpoint(cwd)
             local parent_uuid, uuid = btrfs_uuids(cwd)
