@@ -274,8 +274,8 @@ local function btrfs_snapshots(mountpoint, current_uuid, current_parent_uuid)
 end
 
 return {
-    entry = function(_, args)
-        local action = args[1]
+    entry = function(_, job)
+        local action = job.args[1]
         local cwd = get_cwd()
 
         if action ~= "exit" and action ~= "prev" and action ~= "next" then
